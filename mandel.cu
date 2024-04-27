@@ -650,7 +650,7 @@ void save_img(int ind, uint8_t* img, int width, int height) {
 	fclose(fout);
 }
 
-__global__ void render_mandel(int num_iters, float sqr_escape_rad, int supersample_lvl, mat2 cam, palette* pal, uint8_t* img, int width, int height) {
+__global__ void render_mandel(float Zr0, float Zi0, int num_iters, float sqr_escape_rad, int supersample_lvl, mat2 cam, palette* pal, uint8_t* img, int width, int height) {
 	float dbail = 1E-6;
 	
 	#ifdef __CUDACC__
@@ -672,20 +672,20 @@ __global__ void render_mandel(int num_iters, float sqr_escape_rad, int supersamp
 					float C[2] = {(float) x + (float) a/supersample_lvl, (float) y + (float) b/supersample_lvl};
 					cam.transform(C);
 					
-					float Z[2] = {C[0], C[1]};
+					float Z[2] = {Zr0, Zi0};
 					float Z_r_t = 0;
 					
 					float dZ[2] = {1, 0};
 					float dZ_r_t;
 					
-					for (int i = 2; i <= num_iters; i++) {
-						dZ_r_t = (dZ[0]*Z[0] - dZ[1]*Z[1]) * 2;
-						dZ[1] = (dZ[0]*Z[1] + dZ[1]*Z[0]) * 2;
-						dZ[0] = dZ_r_t;
-						
+					for (int i = 1; i <= num_iters; i++) {
 						Z_r_t = Z[0]*Z[0] - Z[1]*Z[1] + C[0];
 						Z[1] = Z[0]*Z[1]*2 + C[1];
 						Z[0] = Z_r_t;
+						
+						dZ_r_t = (dZ[0]*Z[0] - dZ[1]*Z[1]) * 2;
+						dZ[1] = (dZ[0]*Z[1] + dZ[1]*Z[0]) * 2;
+						dZ[0] = dZ_r_t;
 						
 						float sqr_rad = Z[0]*Z[0] + Z[1]*Z[1];
 						if (sqr_rad > sqr_escape_rad) {
@@ -741,8 +741,8 @@ int main() {
 	cudaError_t err;
 	#endif
 	
-	int width = 320*8;
-	int height = 120*8;
+	int width = 1920*2;
+	int height = 540*2;
 	
 	int num_iters = 5000;
 	float sqr_escape_rad = 8*8;
@@ -761,7 +761,7 @@ int main() {
 		
 	// mat2 cam(-0.5755, 0.5747, width, height, 4000); // Half
 	
-	mat2 cam(0.19, -0.75, width, height, 1.695); // Half Spire
+	mat2 cam(-1.6, 0.6, width, height, 0.2344); // Half
 	
 	// The zoom level that the animation approaches.
 	// Has no impact while rendering frame 0.
@@ -769,11 +769,19 @@ int main() {
 	float final_zoom = 0.45;
 	
 	// Number of frames in the animation.
-	int num_frames = 1;
+	int num_frames = 48*3;
 	
 	// Portion of the animation to render.
 	int start_frame = 0;
 	int end_frame = num_frames;
+	
+	// The initial and final values for Z throughout the animation. Linearly interpolated.
+	// To render the Mandelbrot proper, all four values must be 0.
+	float start_Zr0 = 0;
+	float start_Zi0 = -1.7;
+	
+	float final_Zr0 = 0;
+	float final_Zi0 = 0;
 	
 	printf("Constructing Palette...\n");
 	palette pal(5, 0, 0, 7, 100);
@@ -789,7 +797,6 @@ int main() {
 	pal.add_color(0.42,   237, 255, 255);
 	pal.add_color(0.6425, 255, 120,   180);
 	pal.add_color(0.8575,   0,   2,   0);
-	
 	
 	pal.cache_cubics();
 	pal.debug("test.ppm");
@@ -808,6 +815,10 @@ int main() {
 	
 	for (int f = start_frame; f < end_frame; f++) {
 		printf("Rendering frame %04d... ", f);
+		float t = (float) f / num_frames;
+		
+		float curr_Zr0 = (final_Zr0 - start_Zr0)*t + start_Zr0;
+		float curr_Zi0 = (final_Zi0 - start_Zi0)*t + start_Zi0;
 		float curr_zoom = start_zoom * pow((float) start_zoom / final_zoom, (float) -f / (num_frames - 1));
 		//cam = mat2(-0.575305, 0.574783, width, height, curr_zoom);
 		
@@ -816,7 +827,7 @@ int main() {
 			dim3 block(block_edge, block_edge);
 			dim3 grid(width/block_edge, height/block_edge);
 			
-			render_mandel<<<grid, block>>>(num_iters, sqr_escape_rad, supersample_lvl, cam, pal.get_gpu_ptr(), img, width, height);
+			render_mandel<<<grid, block>>>(curr_Zr0, curr_Zi0, num_iters, sqr_escape_rad, supersample_lvl, cam, pal.get_gpu_ptr(), img, width, height);
 			err = cudaGetLastError();
 			handle_cuda_err(err, __LINE__);
 			
@@ -824,7 +835,7 @@ int main() {
 			err = cudaDeviceSynchronize();
 			handle_cuda_err(err, __LINE__);
 		#else
-			render_mandel(num_iters, sqr_escape_rad, supersample_lvl, cam, pal_p, img, width, height);
+			render_mandel(curr_Zr0, curr_Zi0, num_iters, sqr_escape_rad, supersample_lvl, cam, pal_p, img, width, height);
 		#endif
 		
 		printf("Saving...\n");
